@@ -1,0 +1,22 @@
+{
+  "name": "AK Finance",
+  "short_name": "AK Finance",
+  "description": "Money lending tracker for AK Finance",
+  "start_url": "/ak-finance/",
+  "display": "standalone",
+  "background_color": "#1e40af",
+  "theme_color": "#1e40af",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "https://rjkishore.github.io/ak-finance/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "https://rjkishore.github.io/ak-finance/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
