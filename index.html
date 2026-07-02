@@ -7,13 +7,20 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
 <style>
-:root{--p:#1a56db;--g:#057a55;--r:#e02424;--o:#c27803;--bg:#f0f4f8;--card:#fff;--br:#e2e8f0;--mu:#64748b;--tx:#1e293b}
+:root{--p:#1a56db;--g:#057a55;--r:#e02424;--o:#c27803;--bg:#f0f4f8;--card:#fff;--br:#e2e8f0;--mu:#64748b;--tx:#1e293b;--nav:#1e40af;--tabs:#fff;--tabsb:#e2e8f0}
+body.dark{--bg:#0f172a;--card:#1e293b;--br:#334155;--mu:#94a3b8;--tx:#e2e8f0;--nav:#0f172a;--tabs:#1e293b;--tabsb:#334155}
+body.dark .pcard,body.dark .form-card{background:var(--card)}
+body.dark .pstat{background:#263548}
+body.dark .hist-row{border-color:#334155}
+body.dark .paid-row{background:#163024;border-color:#166534}
+body.dark input,body.dark select{background:#1e293b;color:var(--tx);border-color:var(--br)}
+body.dark input::placeholder{color:#475569}
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:'Segoe UI',sans-serif;background:var(--bg);color:var(--tx);min-height:100vh;font-size:15px}
-nav{background:#1e40af;color:#fff;padding:12px 16px;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:100;box-shadow:0 2px 8px rgba(0,0,0,.2)}
+nav{background:var(--nav);color:#fff;padding:12px 16px;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:100;box-shadow:0 2px 8px rgba(0,0,0,.2)}
 nav h1{font-size:18px;font-weight:700}
 nav small{font-size:13px;opacity:.8;display:block}
-.tabs{display:flex;background:#fff;border-bottom:3px solid var(--br);position:sticky;top:54px;z-index:99;overflow-x:auto}
+.tabs{display:flex;background:var(--tabs);border-bottom:3px solid var(--tabsb);position:sticky;top:54px;z-index:99;overflow-x:auto}
 .tab{flex:1;text-align:center;padding:12px 8px;cursor:pointer;font-size:14px;font-weight:600;color:var(--mu);border-bottom:3px solid transparent;margin-bottom:-3px;white-space:nowrap}
 .tab.on{color:var(--p);border-color:var(--p)}
 main{max-width:700px;margin:0 auto;padding:12px}
@@ -72,7 +79,10 @@ input::placeholder{color:#c0c9d6;font-weight:400;font-style:italic}
       placeholder="Search name...">
     <button id="clearSearch" onclick="clearGlobalSearch()" style="display:none;position:absolute;right:6px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:#fff;font-size:14px;opacity:.8;">✕</button>
   </div>
-  <div id="navDate" style="font-size:14px;opacity:.8;text-align:right;white-space:nowrap;"></div>
+  <div style="display:flex;align-items:center;gap:8px;">
+    <button onclick="toggleDark()" id="darkBtn" title="Toggle dark mode" style="background:rgba(255,255,255,.15);border:none;border-radius:20px;padding:5px 10px;color:#fff;font-size:16px;cursor:pointer;">🌙</button>
+    <div id="navDate" style="font-size:14px;opacity:.8;text-align:right;white-space:nowrap;"></div>
+  </div>
 </nav>
 
 <div class="tabs">
@@ -462,6 +472,20 @@ DOC.onSnapshot(snap => {
 const today = () => new Date().toISOString().slice(0,10);
 const fmt = n => '₹' + (+n||0).toLocaleString('en-IN');
 const uid = () => Math.random().toString(36).slice(2,10);
+
+// Dark theme
+function toggleDark() {
+  const isDark = document.body.classList.toggle('dark');
+  localStorage.setItem('ak_dark', isDark ? '1' : '0');
+  document.getElementById('darkBtn').textContent = isDark ? '☀️' : '🌙';
+}
+(function(){
+  if (localStorage.getItem('ak_dark') === '1') {
+    document.body.classList.add('dark');
+    const btn = document.getElementById('darkBtn');
+    if (btn) btn.textContent = '☀️';
+  }
+})();
 
 // Nav date
 (function(){
@@ -1001,15 +1025,31 @@ function renderTab(type) {
   const unit   = type==='daily'?'days':type==='weekly'?'weeks':'months';
 
   const totalLent = loans.reduce((s,l)=>s+l.amount,0);
-  const totalPaid = loans.reduce((s,l)=>s+getLoanPayments(l.id).reduce((a,p)=>a+p.amount,0),0);
-  const totalRem  = Math.max(0, totalLent-totalPaid);
   const overdue   = loans.filter(l=>calcBehind(l).behindPeriods>0).length;
-  document.getElementById('sum-'+type).innerHTML = `
-    <div><div class="sumbar-val">${loans.length}</div><div class="sumbar-lbl">Active</div></div>
-    <div><div class="sumbar-val">${fmt(totalLent)}</div><div class="sumbar-lbl">Total Lent</div></div>
-    <div><div class="sumbar-val">${fmt(totalPaid)}</div><div class="sumbar-lbl">Collected</div></div>
-    <div><div class="sumbar-val">${fmt(totalRem)}</div><div class="sumbar-lbl">Remaining</div></div>
-    <div><div class="sumbar-val" style="color:#fca5a5;">${overdue}</div><div class="sumbar-lbl">Behind</div></div>`;
+
+  let sumHtml = '';
+  if (type === 'monthly') {
+    const totalIntPerMonth  = loans.reduce((s,l)=>s+l.installment,0);
+    const totalIntCollected = loans.reduce((s,l)=>s+getTotalInterestPaid(l.id),0);
+    const totalPrincipalLeft= loans.reduce((s,l)=>s+Math.max(0,l.amount-getLoanPayments(l.id).filter(p=>p.paymentType==='principal').reduce((a,p)=>a+p.amount,0)),0);
+    const pendingThisMonth  = loans.filter(l=>!paidInterestThisMonth(l.id)).length;
+    sumHtml = `
+      <div><div class="sumbar-val">${loans.length}</div><div class="sumbar-lbl">Active</div></div>
+      <div><div class="sumbar-val">${fmt(totalIntPerMonth)}</div><div class="sumbar-lbl">Interest/Mo</div></div>
+      <div><div class="sumbar-val">${fmt(totalIntCollected)}</div><div class="sumbar-lbl">Int Collected</div></div>
+      <div><div class="sumbar-val">${fmt(totalPrincipalLeft)}</div><div class="sumbar-lbl">Principal Left</div></div>
+      <div><div class="sumbar-val" style="color:#fca5a5;">${pendingThisMonth}</div><div class="sumbar-lbl">Pending</div></div>`;
+  } else {
+    const totalPaid = loans.reduce((s,l)=>s+getLoanPayments(l.id).reduce((a,p)=>a+p.amount,0),0);
+    const totalRem  = Math.max(0, totalLent-totalPaid);
+    sumHtml = `
+      <div><div class="sumbar-val">${loans.length}</div><div class="sumbar-lbl">Active</div></div>
+      <div><div class="sumbar-val">${fmt(totalLent)}</div><div class="sumbar-lbl">Total Lent</div></div>
+      <div><div class="sumbar-val">${fmt(totalPaid)}</div><div class="sumbar-lbl">Collected</div></div>
+      <div><div class="sumbar-val">${fmt(totalRem)}</div><div class="sumbar-lbl">Remaining</div></div>
+      <div><div class="sumbar-val" style="color:#fca5a5;">${overdue}</div><div class="sumbar-lbl">Behind</div></div>`;
+  }
+  document.getElementById('sum-'+type).innerHTML = sumHtml;
 
   if (!loans.length && !closed.length) {
     list.innerHTML = `<div class="empty"><div style="font-size:40px;">📋</div><p style="margin-top:8px;">No loans yet.<br>Click "+ Add" to start.</p></div>`;
@@ -1170,7 +1210,73 @@ function renderInterest() {
     html = `<div class="empty"><div style="font-size:40px;">📈</div><p style="margin-top:8px;">No interest recorded yet.<br>Add interest amount when creating loans.</p></div>`;
   }
 
+  // ── Month-wise Interest Summary ──────────────────────────────
+  const allIntPaysAll = DB.payments.filter(p=>p.paymentType==='interest'||!p.paymentType);
+  const byMonth = {};
+  allIntPaysAll.forEach(p => {
+    const m = p.date.slice(0,7);
+    if (!byMonth[m]) byMonth[m] = 0;
+    byMonth[m] += p.amount;
+  });
+  const months = Object.keys(byMonth).sort().reverse();
+
+  if (months.length) {
+    if (!DB.interestWithdrawals) DB.interestWithdrawals = [];
+    let mHtml = months.map(m => {
+      const amt = byMonth[m];
+      const rec = DB.interestWithdrawals.find(w=>w.month===m);
+      const status = rec ? rec.status : '';
+      const takenBy = rec ? (rec.takenBy||'') : '';
+      const label = new Date(m+'-01').toLocaleDateString('en-IN',{month:'long',year:'numeric'});
+      let btnHtml = '';
+      if (!status) {
+        btnHtml = `<button onclick="markWithdrawal('${m}',event)" style="background:#e2e8f0;color:#64748b;border:none;border-radius:7px;padding:5px 10px;font-size:12px;font-weight:700;cursor:pointer;">○ Not Withdrawn</button>`;
+      } else if (status==='kishore') {
+        btnHtml = `<button onclick="markWithdrawal('${m}',event)" style="background:#1a56db;color:#fff;border:none;border-radius:7px;padding:5px 10px;font-size:12px;font-weight:700;cursor:pointer;">👤 Kishore Took</button>`;
+      } else if (status==='ammu') {
+        btnHtml = `<button onclick="markWithdrawal('${m}',event)" style="background:#7c3aed;color:#fff;border:none;border-radius:7px;padding:5px 10px;font-size:12px;font-weight:700;cursor:pointer;">👤 Ammu Took</button>`;
+      } else if (status==='both') {
+        btnHtml = `<button onclick="markWithdrawal('${m}',event)" style="background:#057a55;color:#fff;border:none;border-radius:7px;padding:5px 10px;font-size:12px;font-weight:700;cursor:pointer;">✅ Both Took</button>`;
+      }
+      return `<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--br);">
+        <div>
+          <div style="font-weight:700;font-size:14px;">${label}</div>
+          <div style="font-size:13px;color:var(--mu);margin-top:2px;">Total Interest Collected</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span style="font-size:16px;font-weight:800;color:var(--o);">${fmt(amt)}</span>
+          ${btnHtml}
+        </div>
+      </div>`;
+    }).join('');
+
+    html += `
+    <div style="border-radius:8px;overflow:hidden;margin:8px 0 4px;">
+      <div onclick="toggleIntSection('int-sec-monthwise')" style="display:flex;justify-content:space-between;align-items:center;background:#0f766e;color:#fff;padding:10px 14px;cursor:pointer;border-radius:8px;">
+        <span style="font-size:14px;font-weight:700;">📅 Month-wise Interest & Withdrawal</span>
+        <span id="int-sec-monthwise-arrow" style="font-size:14px;">▼</span>
+      </div>
+      <div id="int-sec-monthwise" style="display:none;background:var(--card);padding:0 14px;border-radius:0 0 8px 8px;border:1px solid var(--br);border-top:none;">
+        ${mHtml}
+      </div>
+    </div>`;
+  }
+
   document.getElementById('interest-content').innerHTML = html;
+}
+
+function markWithdrawal(month, event) {
+  event.stopPropagation();
+  if (!DB.interestWithdrawals) DB.interestWithdrawals = [];
+  let rec = DB.interestWithdrawals.find(w=>w.month===month);
+  const cycle = ['','kishore','ammu','both'];
+  if (!rec) {
+    DB.interestWithdrawals.push({id:uid(), month, status:'kishore'});
+  } else {
+    const idx = cycle.indexOf(rec.status);
+    rec.status = cycle[(idx+1) % cycle.length];
+  }
+  SAVE(); renderInterest();
 }
 
 function renderFinish() {
