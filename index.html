@@ -231,6 +231,17 @@ input::placeholder{color:#c0c9d6;font-weight:400;font-style:italic}
 
 </main>
 
+<!-- DASHBOARD DETAIL MODAL -->
+<div id="dashModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:200;align-items:flex-end;justify-content:center;padding:0;">
+  <div style="background:#fff;border-radius:20px 20px 0 0;width:100%;max-width:480px;max-height:80vh;display:flex;flex-direction:column;">
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 18px;border-bottom:1px solid var(--br);">
+      <h2 id="dash-modal-title" style="font-size:16px;font-weight:700;"></h2>
+      <button onclick="document.getElementById('dashModal').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--mu);">✕</button>
+    </div>
+    <div id="dash-modal-body" style="overflow-y:auto;padding:0 18px 20px;flex:1;"></div>
+  </div>
+</div>
+
 <!-- PAYMENT MODAL -->
 <div id="payModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:200;align-items:center;justify-content:center;padding:16px;">
 <div style="background:#fff;border-radius:16px;width:100%;max-width:400px;padding:20px;">
@@ -252,6 +263,14 @@ input::placeholder{color:#c0c9d6;font-weight:400;font-style:italic}
   </div>
 
   <div class="fg"><label>Date</label><input id="pay-date" type="date"></div>
+  <div id="multi-day-row" class="fg" style="display:none;">
+    <label>Number of Days/Periods (multi-payment)</label>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <input id="pay-periods" type="number" min="1" value="1" placeholder="1" style="width:80px;" oninput="updateMultiAmt()">
+      <span style="font-size:13px;color:var(--mu);font-weight:600;">× installment = total</span>
+      <span id="multi-total" style="font-size:14px;font-weight:800;color:var(--p);"></span>
+    </div>
+  </div>
   <div class="fg"><label>Amount Received (₹)</label><input id="pay-amt" type="number" placeholder="Enter amount paid"></div>
   <div class="fg">
     <label>Received As</label>
@@ -345,6 +364,59 @@ function SAVE() {
   // Also backup to localStorage
   try { localStorage.setItem('vt1', JSON.stringify(DB)); } catch(e){}
   DOC.set(DB).catch(e => console.error('Save error:', e));
+}
+
+function showDashModal(type) {
+  const allLoans  = DB.loans.filter(l=>l.status==='active');
+  const allClosed = DB.loans.filter(l=>l.status==='closed');
+  let title='', items=[];
+
+  if (type==='active') {
+    title = `Active Loans (${allLoans.length})`;
+    items = allLoans.map(l => {
+      const rem = Math.max(0, l.amount - getLoanPayments(l.id).filter(p=>l.type==='monthly'?p.paymentType==='principal':true).reduce((s,p)=>s+p.amount,0));
+      return `<div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid #f1f5f9;font-size:14px;">
+        <div><div style="font-weight:700;">${l.name}</div><div style="color:var(--mu);font-size:13px;">${l.type} · ${l.date}</div></div>
+        <div style="text-align:right;"><div style="font-weight:800;color:var(--p);">${fmt(l.amount)}</div><div style="font-size:12px;color:var(--r);">${fmt(rem)} left</div></div>
+      </div>`;
+    });
+  } else if (type==='collected') {
+    title = `Closed Loans (${allClosed.length})`;
+    items = allClosed.map(l => {
+      const paid = getLoanPayments(l.id).reduce((s,p)=>s+p.amount,0);
+      return `<div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid #f1f5f9;font-size:14px;">
+        <div><div style="font-weight:700;">${l.name}</div><div style="color:var(--mu);font-size:13px;">${l.type} · ${l.date}</div></div>
+        <div style="text-align:right;"><div style="font-weight:800;color:var(--g);">${fmt(paid)} collected</div><div style="font-size:12px;color:var(--mu);">${fmt(l.amount)} loan</div></div>
+      </div>`;
+    });
+  } else if (type==='today') {
+    const todayStr = today();
+    const todayPays = DB.payments.filter(p=>p.date===todayStr);
+    title = `Collected Today`;
+    items = todayPays.map(p => {
+      const loan = DB.loans.find(l=>l.id===p.loanId);
+      return `<div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid #f1f5f9;font-size:14px;">
+        <div><div style="font-weight:700;">${loan?loan.name:'Unknown'}</div><div style="color:var(--mu);font-size:13px;">${loan?loan.type:''} · ${p.wallet==='online'?'📱 Online':'💵 Cash'}</div></div>
+        <div style="font-weight:800;color:var(--g);">${fmt(p.amount)}</div>
+      </div>`;
+    });
+    if (!items.length) items = [`<div style="text-align:center;padding:20px;color:var(--mu);">No payments today yet</div>`];
+  } else if (type==='behind') {
+    const behind = allLoans.map(l=>({...l,bp:calcBehind(l).behindPeriods})).filter(l=>l.bp>0).sort((a,b)=>b.bp-a.bp);
+    title = `Behind Schedule (${behind.length})`;
+    items = behind.map(l => {
+      const unit = l.type==='daily'?'days':l.type==='weekly'?'weeks':'months';
+      return `<div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid #f1f5f9;font-size:14px;">
+        <div><div style="font-weight:700;">${l.name}</div><div style="color:var(--mu);font-size:13px;">${l.type} · ${l.date}</div></div>
+        <div style="text-align:right;"><div style="font-weight:800;color:var(--r);">${l.bp} ${unit} behind</div><div style="font-size:12px;color:var(--mu);">${fmt(calcBehind(l).shortfall)} shortfall</div></div>
+      </div>`;
+    });
+    if (!items.length) items = [`<div style="text-align:center;padding:20px;color:var(--g);font-weight:700;">✅ Everyone is on track!</div>`];
+  }
+
+  document.getElementById('dash-modal-title').textContent = title;
+  document.getElementById('dash-modal-body').innerHTML = items.join('');
+  document.getElementById('dashModal').style.display = 'flex';
 }
 
 function refreshCurrentTab() {
@@ -507,15 +579,15 @@ function renderDash() {
   document.getElementById('dash-content').innerHTML = `
     <!-- Big totals -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
-      <div style="background:#1e40af;color:#fff;border-radius:12px;padding:14px;text-align:center;">
+      <div onclick="showDashModal('active')" style="background:#1e40af;color:#fff;border-radius:12px;padding:14px;text-align:center;cursor:pointer;">
         <div style="font-size:14px;opacity:.8;">Total Lent Out</div>
         <div style="font-size:22px;font-weight:800;margin-top:2px;">${fmt(totalLent)}</div>
-        <div style="font-size:14px;opacity:.8;margin-top:4px;">${allLoans.length} active loans</div>
+        <div style="font-size:14px;opacity:.8;margin-top:4px;">${allLoans.length} active loans ▼</div>
       </div>
-      <div style="background:#065f46;color:#fff;border-radius:12px;padding:14px;text-align:center;">
+      <div onclick="showDashModal('collected')" style="background:#065f46;color:#fff;border-radius:12px;padding:14px;text-align:center;cursor:pointer;">
         <div style="font-size:14px;opacity:.8;">Total Collected</div>
         <div style="font-size:22px;font-weight:800;margin-top:2px;">${fmt(totalPaid)}</div>
-        <div style="font-size:14px;opacity:.8;margin-top:4px;">${allClosed.length} loans closed</div>
+        <div style="font-size:14px;opacity:.8;margin-top:4px;">${allClosed.length} loans closed ▼</div>
       </div>
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:14px;">
@@ -523,13 +595,13 @@ function renderDash() {
         <div style="font-size:14px;color:var(--mu);">Outstanding</div>
         <div style="font-size:17px;font-weight:800;color:var(--r);margin-top:2px;">${fmt(totalRem)}</div>
       </div>
-      <div style="background:#fff;border:1px solid var(--br);border-radius:12px;padding:12px;text-align:center;">
+      <div onclick="showDashModal('today')" style="background:#fff;border:1px solid var(--br);border-radius:12px;padding:12px;text-align:center;cursor:pointer;">
         <div style="font-size:14px;color:var(--mu);">Today Collected</div>
-        <div style="font-size:17px;font-weight:800;color:var(--g);margin-top:2px;">${fmt(todayCollected)}</div>
+        <div style="font-size:17px;font-weight:800;color:var(--g);margin-top:2px;">${fmt(todayCollected)} ▼</div>
       </div>
-      <div style="background:#fff;border:1px solid var(--br);border-radius:12px;padding:12px;text-align:center;">
+      <div onclick="showDashModal('behind')" style="background:#fff;border:1px solid var(--br);border-radius:12px;padding:12px;text-align:center;cursor:pointer;">
         <div style="font-size:14px;color:var(--mu);">Behind Schedule</div>
-        <div style="font-size:17px;font-weight:800;color:var(--o);margin-top:2px;">${totalBehind} people</div>
+        <div style="font-size:17px;font-weight:800;color:var(--o);margin-top:2px;">${totalBehind} people ▼</div>
       </div>
     </div>
 
@@ -687,7 +759,7 @@ function getTotalPaid(loanId, loan) {
   return getLoanPayments(loanId).reduce((s,p)=>s+p.amount,0);
 }
 function getTotalInterestPaid(loanId) {
-  return getInterestPayments(loanId).filter(p=>p.paymentType==='interest').reduce((s,p)=>s+p.amount,0);
+  return getInterestPayments(loanId).reduce((s,p)=>s+p.amount,0);
 }
 function calcBehind(loan) {
   const start = new Date(loan.date);
@@ -761,7 +833,7 @@ function transferToggleBtn(loanId) {
 }
 
 // Render
-function renderLoanRowGlobal(loan, isClosed, idPrefix) {
+function renderLoanRowGlobal(loan, isClosed, idPrefix, cardIndex) {
     const isMonthly = loan.type === 'monthly';
     const unit  = loan.type==='daily'?'days':loan.type==='weekly'?'weeks':'months';
     const unitS = loan.type==='daily'?'day':loan.type==='weekly'?'week':'month';
@@ -794,8 +866,8 @@ function renderLoanRowGlobal(loan, isClosed, idPrefix) {
 
     // Payment history: monthly shows interest payments; daily/weekly shows all
     const histPays = isMonthly
-      ? getLoanPayments(loan.id).filter(p=>p.paymentType==='interest').slice(-5).reverse()
-      : getLoanPayments(loan.id).slice(-5).reverse();
+      ? getLoanPayments(loan.id).filter(p=>p.paymentType==='interest').reverse()
+      : getLoanPayments(loan.id).reverse();
     const histRows = histPays.map(p=>
       `<div class="hist-row" style="align-items:center;">
         <span>${p.date}</span>
@@ -872,10 +944,11 @@ function renderLoanRowGlobal(loan, isClosed, idPrefix) {
         <button onclick="event.stopPropagation();undoPay('${interestThisMonth.id}','monthly')" class="btn btn-sm btn-r" style="font-size:12px;padding:4px 8px;">Undo</button>
       </div>` : ''));
 
+    const rowBg = isClosed ? '#f8fafc' : (cardIndex%2===0 ? '#ffffff' : '#f0f7ff');
     return `
-    <div style="border:1px solid var(--br);border-radius:10px;margin-bottom:8px;overflow:hidden;${isClosed?'opacity:.6;':''}">
+    <div style="border:1px solid var(--br);border-radius:10px;margin-bottom:8px;overflow:hidden;${isClosed?'opacity:.6;':''}background:${rowBg};">
       <div onclick="toggleLoanCard('${cardId}')"
-        style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;cursor:pointer;background:#fff;gap:8px;">
+        style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;cursor:pointer;background:inherit;gap:8px;">
         <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0;">
           <span style="width:10px;height:10px;border-radius:50%;background:${statusDot};flex-shrink:0;display:inline-block;"></span>
           <div style="min-width:0;">
@@ -885,7 +958,7 @@ function renderLoanRowGlobal(loan, isClosed, idPrefix) {
         </div>
         <div style="text-align:right;flex-shrink:0;margin-right:6px;">
           <div style="font-size:15px;font-weight:800;color:${remaining>0?'var(--r)':'var(--g)'};">${fmt(remaining)}</div>
-          <div style="font-size:11px;color:var(--mu);font-weight:600;">remaining</div>
+          <div style="font-size:11px;color:var(--mu);font-weight:600;">${isMonthly?'principal left':'remaining'}</div>
         </div>
         <span id="${cardId}-arrow" style="color:var(--mu);font-size:13px;flex-shrink:0;">▼</span>
       </div>
@@ -946,7 +1019,7 @@ function renderTab(type) {
   loans.sort((a,b) => calcBehind(b).behindPeriods - calcBehind(a).behindPeriods);
 
   let html = '';
-  loans.forEach(loan => { html += renderLoanRowGlobal(loan, false); });
+  loans.forEach((loan, i) => { html += renderLoanRowGlobal(loan, false, undefined, i); });
 
   if (closed.length) {
     html += `<div style="margin:16px 0 8px;font-size:14px;font-weight:600;color:var(--mu);text-align:center;">
@@ -1271,11 +1344,23 @@ function openPayModal(loanId) {
 
   document.getElementById('pay-date').value=today();
   document.getElementById('pay-note').value='';
+  document.getElementById('pay-periods').value='1';
+  document.getElementById('multi-total').textContent='';
+  // Show multi-day only for daily/weekly
+  document.getElementById('multi-day-row').style.display = loan.type!=='monthly' ? 'block' : 'none';
   document.getElementById('payModal').style.display='flex';
 }
 function closePayModal() {
   document.getElementById('payModal').style.display='none';
   _payLoanId=null;
+}
+function updateMultiAmt() {
+  const loan = DB.loans.find(l=>l.id===_payLoanId);
+  if (!loan) return;
+  const periods = parseInt(document.getElementById('pay-periods').value)||1;
+  const total = periods * loan.installment;
+  document.getElementById('pay-amt').value = total;
+  document.getElementById('multi-total').textContent = '₹'+total.toLocaleString('en-IN');
 }
 function savePayment() {
   const amt=parseFloat(document.getElementById('pay-amt').value);
@@ -1284,7 +1369,21 @@ function savePayment() {
   if (!date){alert('Select a date');return;}
   const loan=DB.loans.find(l=>l.id===_payLoanId);
   const paymentType = loan.type==='monthly' ? _payType : 'principal';
-  DB.payments.push({id:uid(),loanId:_payLoanId,amount:amt,date,wallet:_payWallet,paymentType,note:document.getElementById('pay-note').value.trim()});
+  const note=document.getElementById('pay-note').value.trim();
+  const periods = loan.type!=='monthly' ? (parseInt(document.getElementById('pay-periods').value)||1) : 1;
+  if (periods > 1) {
+    // Create one payment record per period, spreading across consecutive days from selected date
+    const baseDate = new Date(date);
+    for (let i=0; i<periods; i++) {
+      const d = new Date(baseDate);
+      const interval = loan.type==='weekly' ? 7 : 1;
+      d.setDate(d.getDate() + i*interval);
+      const dStr = d.toISOString().slice(0,10);
+      DB.payments.push({id:uid(),loanId:_payLoanId,amount:loan.installment,date:dStr,wallet:_payWallet,paymentType,note});
+    }
+  } else {
+    DB.payments.push({id:uid(),loanId:_payLoanId,amount:amt,date,wallet:_payWallet,paymentType,note});
+  }
   if (loan.type!=='monthly' && getTotalPaid(_payLoanId,loan)>=loan.amount) loan.status='closed';
   SAVE(); closePayModal();
   if (currentTab === 'interest') renderInterest();
