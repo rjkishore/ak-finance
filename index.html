@@ -353,7 +353,7 @@ input::placeholder{color:#c0c9d6;font-weight:400;font-style:italic}
 </div>
 
 <script>
-let DB = { loans: [], payments: [], sources: [], sourcePayments: [], interestTransfers: [] };
+let DB = { loans: [], payments: [], sources: [], sourcePayments: [], interestTransfers: [], interestWithdrawals: [] };
 
 // ── Firebase Setup ────────────────────────────────────────────
 const firebaseConfig = {
@@ -446,14 +446,17 @@ DOC.onSnapshot(snap => {
       payments:          d.payments          || [],
       sources:           d.sources           || [],
       sourcePayments:    d.sourcePayments    || [],
-      interestTransfers: d.interestTransfers || []
+      interestTransfers:   d.interestTransfers   || [],
+      interestWithdrawals: d.interestWithdrawals || []
     };
   }
   if (!_appReady) {
     _appReady = true;
     document.getElementById('loading-screen').style.display = 'none';
     document.getElementById('app-wrap').style.display = 'block';
-    showTab('dash');
+    const validTabs = ['dash','daily','weekly','monthly','interest','finish','capital'];
+    const savedTab = validTabs.includes(localStorage.getItem('ak_tab')) ? localStorage.getItem('ak_tab') : 'dash';
+    showTab(savedTab);
   } else {
     refreshCurrentTab();
   }
@@ -498,6 +501,7 @@ function toggleDark() {
 let currentTab = 'dash';
 function showTab(t) {
   currentTab = t;
+  localStorage.setItem('ak_tab', t);
   // Clear search when switching tabs
   const srch = document.getElementById('globalSearch');
   if (srch && srch.value) { srch.value = ''; const btn = document.getElementById('clearSearch'); if(btn) btn.style.display='none'; }
@@ -1031,13 +1035,14 @@ function renderTab(type) {
   if (type === 'monthly') {
     const totalIntPerMonth  = loans.reduce((s,l)=>s+l.installment,0);
     const totalIntCollected = loans.reduce((s,l)=>s+getTotalInterestPaid(l.id),0);
+    const totalPrincipal    = loans.reduce((s,l)=>s+l.amount,0);
     const totalPrincipalLeft= loans.reduce((s,l)=>s+Math.max(0,l.amount-getLoanPayments(l.id).filter(p=>p.paymentType==='principal').reduce((a,p)=>a+p.amount,0)),0);
     const pendingThisMonth  = loans.filter(l=>!paidInterestThisMonth(l.id)).length;
     sumHtml = `
       <div><div class="sumbar-val">${loans.length}</div><div class="sumbar-lbl">Active</div></div>
-      <div><div class="sumbar-val">${fmt(totalIntPerMonth)}</div><div class="sumbar-lbl">Interest/Mo</div></div>
-      <div><div class="sumbar-val">${fmt(totalIntCollected)}</div><div class="sumbar-lbl">Int Collected</div></div>
-      <div><div class="sumbar-val">${fmt(totalPrincipalLeft)}</div><div class="sumbar-lbl">Principal Left</div></div>
+      <div><div class="sumbar-val">${fmt(totalPrincipal)}</div><div class="sumbar-lbl">Principal</div></div>
+      <div><div class="sumbar-val">${fmt(totalIntPerMonth)}</div><div class="sumbar-lbl">Int/Mo</div></div>
+      <div><div class="sumbar-val">${fmt(totalIntCollected)}</div><div class="sumbar-lbl">Collected</div></div>
       <div><div class="sumbar-val" style="color:#fca5a5;">${pendingThisMonth}</div><div class="sumbar-lbl">Pending</div></div>`;
   } else {
     const totalPaid = loans.reduce((s,l)=>s+getLoanPayments(l.id).reduce((a,p)=>a+p.amount,0),0);
@@ -1085,13 +1090,14 @@ function renderInterest() {
   const weeklyIntTotal  = weeklyLoans.reduce((s,l)=>s+(+l.rate||0),0);
   const expectedMonthly = monthlyLoans.filter(l=>l.status==='active').reduce((s,l)=>s+l.installment,0);
   const pendingMonthly  = monthlyLoans.filter(l=>l.status==='active'&&!paidInterestThisMonth(l.id)).length;
-  const grandTotal      = dailyIntTotal + weeklyIntTotal + totalIntPaid;
+  const totalExpectedPerMonth = dailyIntTotal + weeklyIntTotal + expectedMonthly;
+  const collectedThisMonth    = DB.payments.filter(p=>(p.paymentType==='interest'||!p.paymentType)&&p.date.startsWith(thisMonth)).reduce((s,p)=>s+p.amount,0);
 
   document.getElementById('interest-sumbar').innerHTML = `
-    <div><div class="sumbar-val">${fmt(dailyIntTotal+weeklyIntTotal)}</div><div class="sumbar-lbl">Daily+Weekly</div></div>
-    <div><div class="sumbar-val">${fmt(expectedMonthly)}</div><div class="sumbar-lbl">Monthly/Mo</div></div>
-    <div><div class="sumbar-val" style="color:#fca5a5;">${pendingMonthly}</div><div class="sumbar-lbl">Pending</div></div>
-    <div><div class="sumbar-val">${fmt(grandTotal)}</div><div class="sumbar-lbl">Total Interest</div></div>`;
+    <div><div class="sumbar-val">${fmt(totalExpectedPerMonth)}</div><div class="sumbar-lbl">Expected/Mo</div></div>
+    <div><div class="sumbar-val">${fmt(collectedThisMonth)}</div><div class="sumbar-lbl">This Month</div></div>
+    <div><div class="sumbar-val">${fmt(totalIntPaid)}</div><div class="sumbar-lbl">All-time Int</div></div>
+    <div><div class="sumbar-val" style="color:#fca5a5;">${pendingMonthly}</div><div class="sumbar-lbl">Pending</div></div>`;
 
   let html = '';
 
@@ -1223,29 +1229,42 @@ function renderInterest() {
   if (months.length) {
     if (!DB.interestWithdrawals) DB.interestWithdrawals = [];
     let mHtml = months.map(m => {
-      const amt = byMonth[m];
-      const rec = DB.interestWithdrawals.find(w=>w.month===m);
-      const status = rec ? rec.status : '';
-      const takenBy = rec ? (rec.takenBy||'') : '';
+      const total = byMonth[m];
+      const rec = DB.interestWithdrawals.find(w=>w.month===m) || {};
+      const kishoreTook = +(rec.kishoreTook||0);
+      const ammuTook    = +(rec.ammuTook||0);
+      const balance     = total - kishoreTook - ammuTook;
       const label = new Date(m+'-01').toLocaleDateString('en-IN',{month:'long',year:'numeric'});
-      let btnHtml = '';
-      if (!status) {
-        btnHtml = `<button onclick="markWithdrawal('${m}',event)" style="background:#e2e8f0;color:#64748b;border:none;border-radius:7px;padding:5px 10px;font-size:12px;font-weight:700;cursor:pointer;">○ Not Withdrawn</button>`;
-      } else if (status==='kishore') {
-        btnHtml = `<button onclick="markWithdrawal('${m}',event)" style="background:#1a56db;color:#fff;border:none;border-radius:7px;padding:5px 10px;font-size:12px;font-weight:700;cursor:pointer;">👤 Kishore Took</button>`;
-      } else if (status==='ammu') {
-        btnHtml = `<button onclick="markWithdrawal('${m}',event)" style="background:#7c3aed;color:#fff;border:none;border-radius:7px;padding:5px 10px;font-size:12px;font-weight:700;cursor:pointer;">👤 Ammu Took</button>`;
-      } else if (status==='both') {
-        btnHtml = `<button onclick="markWithdrawal('${m}',event)" style="background:#057a55;color:#fff;border:none;border-radius:7px;padding:5px 10px;font-size:12px;font-weight:700;cursor:pointer;">✅ Both Took</button>`;
-      }
-      return `<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--br);">
-        <div>
+      return `<div style="padding:12px 0;border-bottom:1px solid var(--br);">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
           <div style="font-weight:700;font-size:14px;">${label}</div>
-          <div style="font-size:13px;color:var(--mu);margin-top:2px;">Total Interest Collected</div>
+          <span style="font-size:16px;font-weight:800;color:var(--o);">${fmt(total)} collected</span>
         </div>
-        <div style="display:flex;align-items:center;gap:8px;">
-          <span style="font-size:16px;font-weight:800;color:var(--o);">${fmt(amt)}</span>
-          ${btnHtml}
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px;">
+          <div style="background:#eff6ff;border-radius:8px;padding:8px;text-align:center;">
+            <div style="font-size:13px;color:var(--mu);font-weight:600;">👤 Kishore</div>
+            <div style="font-size:15px;font-weight:800;color:#1a56db;">${fmt(kishoreTook)}</div>
+          </div>
+          <div style="background:#f5f3ff;border-radius:8px;padding:8px;text-align:center;">
+            <div style="font-size:13px;color:var(--mu);font-weight:600;">👤 Ammu</div>
+            <div style="font-size:15px;font-weight:800;color:#7c3aed;">${fmt(ammuTook)}</div>
+          </div>
+          <div style="background:${balance>0?'#fff7ed':'#f0fdf4'};border-radius:8px;padding:8px;text-align:center;">
+            <div style="font-size:13px;color:var(--mu);font-weight:600;">Balance</div>
+            <div style="font-size:15px;font-weight:800;color:${balance>0?'var(--r)':'var(--g)'};">${fmt(balance)}</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:6px;align-items:center;">
+          <input type="number" placeholder="Kishore took ₹" id="wk-${m}"
+            value="${kishoreTook||''}"
+            style="flex:1;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:7px;font-size:13px;"
+            onclick="event.stopPropagation()">
+          <input type="number" placeholder="Ammu took ₹" id="wa-${m}"
+            value="${ammuTook||''}"
+            style="flex:1;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:7px;font-size:13px;"
+            onclick="event.stopPropagation()">
+          <button onclick="saveWithdrawal('${m}',event)"
+            style="padding:6px 12px;background:#0f766e;color:#fff;border:none;border-radius:7px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap;">💾 Save</button>
         </div>
       </div>`;
     }).join('');
@@ -1265,17 +1284,14 @@ function renderInterest() {
   document.getElementById('interest-content').innerHTML = html;
 }
 
-function markWithdrawal(month, event) {
+function saveWithdrawal(month, event) {
   event.stopPropagation();
   if (!DB.interestWithdrawals) DB.interestWithdrawals = [];
+  const kishoreTook = +(document.getElementById('wk-'+month)?.value||0);
+  const ammuTook    = +(document.getElementById('wa-'+month)?.value||0);
   let rec = DB.interestWithdrawals.find(w=>w.month===month);
-  const cycle = ['','kishore','ammu','both'];
-  if (!rec) {
-    DB.interestWithdrawals.push({id:uid(), month, status:'kishore'});
-  } else {
-    const idx = cycle.indexOf(rec.status);
-    rec.status = cycle[(idx+1) % cycle.length];
-  }
+  if (!rec) { DB.interestWithdrawals.push({id:uid(), month, kishoreTook, ammuTook}); }
+  else { rec.kishoreTook = kishoreTook; rec.ammuTook = ammuTook; }
   SAVE(); renderInterest();
 }
 
@@ -1525,10 +1541,11 @@ function saveEditPayment() {
   if (!amt||amt<=0||!date) { alert('Enter valid amount and date'); return; }
   pay.amount = amt; pay.date = date; pay.wallet = _epWallet;
   pay.note   = document.getElementById('ep-note').value.trim();
+  const savedPayLoanId = pay.loanId;
   SAVE(); closeEditPayModal();
-  const loan = DB.loans.find(l=>l.id===pay.loanId);
+  const loan = DB.loans.find(l=>l.id===savedPayLoanId);
   if (currentTab==='interest') renderInterest();
-  else if (loan) renderTab(loan.type);
+  else if (loan) { renderTab(loan.type); setTimeout(()=>{ const el=document.getElementById('lc-'+savedPayLoanId); if(el&&el.style.display==='none') toggleLoanCard('lc-'+savedPayLoanId); },80); }
 }
 function deletePayment(payId) {
   const pay  = DB.payments.find(p=>p.id===payId);
@@ -1619,7 +1636,7 @@ function saveEditLoan() {
   const inst = parseFloat(document.getElementById('e-inst').value);
   const date = document.getElementById('e-date').value;
   const src  = document.getElementById('e-source').value.trim();
-  if (!name || !amt || !inst || !date || !src) { alert('Please fill all required fields.'); return; }
+  if (!name || !amt || !inst || !date) { alert('Please fill Name, Amount, Installment and Date.'); return; }
   loan.name        = name;
   loan.phone       = document.getElementById('e-phone').value.trim();
   loan.amount      = amt;
@@ -1628,9 +1645,12 @@ function saveEditLoan() {
   loan.date        = date;
   loan.sourceName  = src;
   loan.note        = document.getElementById('e-note').value.trim();
+  const savedId = _editLoanId;
+  const savedType = loan.type;
   SAVE(); closeEditModal();
   if (currentTab === 'interest') renderInterest();
-  else renderTab(loan.type);
+  else renderTab(savedType);
+  setTimeout(() => { const el = document.getElementById('lc-'+savedId); if(el && el.style.display==='none') toggleLoanCard('lc-'+savedId); }, 80);
 }
 
 function deleteLoan(id) {
